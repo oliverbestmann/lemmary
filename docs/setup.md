@@ -25,6 +25,7 @@ All variables live in `.env` at the project root (see `.env.example`). The
 | `IMPORT_ALLOW_PRIVATE` | unset (blocked) | Set to `1`/`true` to let ngx import reach loopback and RFC1918 hosts. Link-local / cloud-metadata addresses stay blocked. Needed when Paperless-ngx is on the same LAN or Docker network. |
 | `UPLOAD_MAX_MB` | `100` | Cap on a staged split-document PDF upload, in megabytes. Read at startup, not from Settings: staging a PDF costs several times its size in memory while pages are rendered, so it protects the host as much as it shapes the product. A malformed or non-positive value falls back to the default rather than failing the boot. Per-file uploads are capped separately by the `documents.file` field (20 MB). |
 | `IMPORT_STAGING_MAX_BYTES` | `1073741824` (1 GiB) | Cap on an archive staged for import (Amazon orders, Lemmary backup), in bytes. Staging a new archive discards that account's previous one, so this is also the disk a single account can occupy while deciding whether to confirm — the staging area's ceiling is roughly this times the number of accounts. Lower it on a small volume; raise it for a library whose backup runs past a gigabyte. A malformed value, or one under 1 MiB, falls back to the default rather than rejecting every upload. |
+| `WATCH_DIR` | unset (off) | Directory polled every 10s for files to import. Holds one subdirectory per owner, named after that account's email; a file dropped in one is imported as that user and then moved to `<owner>/import-archived/`. Unset means no polling at all. See [Watch directory import](#watch-directory-import). |
 | `PASSKEY_RP_ID` | derived from the request host | Relying-party ID for [passkey sign-in](/passkeys): a bare domain name, no scheme and no port. Defaults to the hostname the request arrived with, which is right whenever the proxy forwards the public `Host`. Set it when it does not, or to pin a parent domain (`example.com` while serving `app.example.com`). **Every enrolled passkey is bound to this value — changing it makes all of them unusable.** Read at startup, not from Settings. |
 | `PASSKEY_ORIGINS` | derived from the request scheme + host | Comma-separated full origins (scheme, host and port) allowed to complete a passkey ceremony. Defaults to the origin the request arrived on, using `X-Forwarded-Proto` for the scheme when present. Set it when the app is reachable at more than one origin, or when a TLS-terminating proxy does not set that header. |
 | `LIMIT_DOCUMENTS` | unset (unlimited) | Total documents this instance may store. |
@@ -273,6 +274,52 @@ Archives exported before manifests existed still restore: their documents are re
 Job state is in memory for the running process only, and one import may run at a time per user. Staging a new archive discards the account's previous one, so an account holds at most one at a time. Uploads are capped by `IMPORT_STAGING_MAX_BYTES` (1 GiB by default) and 5000 documents, each entry at the 20 MB document limit; one budget covers everything the inspection and the restore inflate, so an archive that unpacks far beyond its size is rejected as a zip bomb. A restored document that carries its own OCR sidecar is exempt from [the page ceiling](#the-page-ceiling) — it needs no OCR, so a long document archived before that ceiling existed still restores; an entry without a sidecar takes the ordinary upload path and is subject to it.
 
 An archive with no documents but a non-empty taxonomy is valid and restorable — that is what a backup of a library with tags but no documents looks like.
+
+## Watch directory import
+
+Set `WATCH_DIR` and the instance imports whatever is dropped into it, without a
+browser. It is off entirely when the variable is unset — no poller runs.
+
+The directory holds **one subdirectory per owner**, named after that account's
+email address, because a document belongs to a user and duplicate detection is
+keyed per user; there is no way to infer an owner from a file alone.
+
+You do not create these by hand. The watch directory itself and a subdirectory
+for every account are created on each pass, so a fresh instance shows the
+layout on its own and an account registered later gets its directory within ten
+seconds. Directories of accounts that no longer exist are never removed — they
+may still hold files nobody has collected.
+
+```text
+$WATCH_DIR/
+  alice@example.com/
+    scan-001.pdf            <- imported as alice, then archived
+    import-archived/
+      scan-000.pdf
+  bob@example.com/
+```
+
+Every 10 seconds each owner directory is scanned and each file in it is
+imported exactly as an upload would be: the same checksum duplicate check, the
+same OCR/AI processing job. The file is then moved into that owner's
+`import-archived/` — **whether it was imported or skipped as a duplicate**, so
+an empty owner directory means there is nothing left to do. A name already
+taken in the archive gets a `-1`, `-2` suffix rather than overwriting.
+
+A file that fails for any other reason is left where it is and retried on the
+next pass, with the error logged; it is never silently archived.
+
+Notes:
+
+- A file is only picked up once it has been untouched for 5 seconds, so a
+  scanner or an `scp` still writing its output is not imported half-complete.
+- Subdirectory names that match no account — a stale directory, or one made by
+  hand with a typo in it — are logged and skipped, and only when that directory
+  actually has a file waiting.
+- Dotfiles and nested directories other than `import-archived/` are ignored.
+- The watched directory must be readable *and writable* by the app, since it
+  creates the owner directories and moves files within them. Its parent must
+  exist; only the watch directory itself is created.
 
 ## Processing flow
 

@@ -14,6 +14,7 @@ import (
 	"lemmary/backend/internal/mailsink"
 	"lemmary/backend/internal/ngxapi"
 	"lemmary/backend/internal/ngxid"
+	"lemmary/backend/internal/watchimport"
 	"lemmary/backend/internal/worker"
 
 	"github.com/pocketbase/pocketbase"
@@ -76,6 +77,7 @@ func Register(app *pocketbase.PocketBase, rt *config.Runtime, publicDir string, 
 	appapi.RegisterAdminBootstrap(app)
 	ngxapi.Register(app, ft)
 	worker.Register(app, rt, backfill)
+	watchimport.Register(app)
 
 	registerCOOPHeader(app)
 
