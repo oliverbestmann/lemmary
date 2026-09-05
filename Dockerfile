@@ -10,10 +10,10 @@
 # native. Multiarch is what keeps a local `--platform linux/amd64,linux/arm64`
 # build honest, and every stage below has to work both ways.
 
-# Cross-compiled rather than emulated when host and target differ, so this stage
-# never runs under QEMU. The pinned commit lives in the script; this layer is
-# rebuilt only when the script changes.
-FROM --platform=$BUILDPLATFORM golang:1.27-trixie AS faiss-build
+# FAISS is compiled on the build machine and cross-compiled for the target, so
+# this stage never runs under emulation. The pinned commit lives in the script;
+# this layer is rebuilt only when the script changes.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27-trixie AS faiss-build
 
 ARG TARGETARCH
 
@@ -37,7 +37,7 @@ RUN /usr/local/bin/faiss-build.sh --prefix /opt/faiss --target-arch "$TARGETARCH
 FROM scratch AS faiss
 COPY --from=faiss-build /opt/faiss/ /
 
-FROM --platform=$BUILDPLATFORM golang:1.27-trixie AS backend-builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27-trixie AS backend-builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -106,7 +106,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # for. So this stage builds for the host and both target images copy the same
 # result, which in a local two-platform build is the difference between building
 # the frontend once and building it twice with one of them emulated.
-FROM --platform=$BUILDPLATFORM node:26-alpine AS frontend-builder
+FROM --platform=$BUILDPLATFORM docker.io/library/node:26-alpine AS frontend-builder
 
 RUN npm install -g pnpm
 
@@ -120,7 +120,7 @@ COPY docs/ /app/docs/
 
 RUN pnpm run build
 
-FROM debian:trixie-slim
+FROM docker.io/library/debian:trixie-slim
 LABEL org.opencontainers.image.title="Lemmary" \
       org.opencontainers.image.description="Source-available document storage with OCR and AI metadata extraction" \
       org.opencontainers.image.source="https://github.com/buldezir/lemmary" \
