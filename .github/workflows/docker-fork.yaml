@@ -1,0 +1,38 @@
+# The server image. The build itself lives in docker-image.yaml, which every
+# image we publish shares; this file is only what is specific to this one.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - "**/*.md"
+      - "!docs/**"
+      - "LICENSE"
+      - ".gitignore"
+      - ".env.example"
+      - "docker-compose.yml"
+      - "**/testdata/**"
+      - "**/*_test.go"
+      # mailgate is a separate module and a separate image; it cannot change
+      # what this one contains.
+      - "mailgate/**"
+      - "Dockerfile.mailgate"
+      - ".github/workflows/docker-mailgate.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    uses: ./.github/workflows/docker-image.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      image: ${{ github.repository }}
+      dockerfile: Dockerfile
+      title: Lemmary
