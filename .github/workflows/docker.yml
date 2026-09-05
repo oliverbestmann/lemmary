@@ -26,7 +26,9 @@ on:
 
 # One self-hosted runner takes these jobs one at a time, so a superseded run
 # would sit in the queue ahead of the push that replaced it. Pushes to main and
-# tags are never cancelled -- those publish images.
+# tags are never cancelled -- those publish the images everything else pulls.
+# A superseded pull request build is cancelled with the rest of its run: its
+# image is a preview of a commit nobody is looking at any more.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -141,9 +143,27 @@ jobs:
         run: ./scripts/test-all.sh
 
   build:
-    if: github.event_name != 'pull_request'
-    # Only runs on push, tag and manual dispatch from this repository, so there
-    # is no untrusted code to keep off the runner.
+    # Never publish an image for a red pull request: the tag moves with the
+    # branch, so pushing one for a failed run would leave whoever pulls it
+    # running code the suite rejected, with nothing in the tag to say so.
+    needs: test
+    # `always()` so this is evaluated at all when `test` did not succeed --
+    # without it a failed dependency skips the job silently instead of on the
+    # terms below. A push or tag skips `test` outright (it is pull-request
+    # only), and a skipped dependency must not block the release build, hence
+    # accepting "skipped" alongside "success".
+    #
+    # A fork's pull request never builds either. The job holds a package-write
+    # token and runs on the self-hosted runner, and a fork's code must have
+    # neither; skipping is the only safe answer, since there is no fork
+    # equivalent of the test job's throwaway-runner fallback once GHCR push is
+    # involved.
+    if: >-
+      always()
+      && (needs.test.result == 'success' || needs.test.result == 'skipped')
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # Otherwise only push, tag and manual dispatch from this repository, so
+    # there is no untrusted code to keep off the runner.
     runs-on: ${{ fromJSON(vars.CI_RUNNER_LABELS || '["self-hosted", "linux", "x64", "homelab"]') }}
     permissions:
       contents: read
@@ -165,17 +185,64 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A branch name may contain characters a Docker tag may not -- "/" above
+      # all, which every feat/… branch has. metadata-action sanitizes the refs
+      # it derives itself, but not a type=raw value, so the branch tag is
+      # sanitized here instead: anything outside the tag alphabet becomes "-".
+      - name: Tag name for this pull request
+        if: github.event_name == 'pull_request'
+        id: branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          tag=$(printf '%s' "$HEAD_REF" | tr -c 'A-Za-z0-9_.-' '-')
+          # A tag may not open with a separator, and is capped at 128 chars.
+          tag=$(printf '%s' "$tag" | sed 's/^[^A-Za-z0-9_]*//' | cut -c1-128)
+          if [ -z "$tag" ]; then
+            echo "::error::Could not derive a Docker tag from branch '$HEAD_REF'"
+            exit 1
+          fi
+
+          # A pull request must not be able to publish over a release tag. The
+          # branch name is the whole tag, this job holds packages:write, and it
+          # runs before any review -- so a branch called `latest` would replace
+          # the image docker-compose.yml and the self-hosting guide tell people
+          # to pull, and one called `1.2` would replace a release line. Refused
+          # rather than silently prefixed: the branch is trivially renamed, and
+          # a tag that did not match its branch would be its own surprise.
+          case "$tag" in
+            latest | main | edge)
+              echo "::error::Branch '$HEAD_REF' would publish over the release tag '$tag'. Rename the branch."
+              exit 1
+              ;;
+          esac
+          if printf '%s' "$tag" | grep -Eq '^v?[0-9]+(\.[0-9]+)*$'; then
+            echo "::error::Branch '$HEAD_REF' looks like a release version. Rename the branch."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "::notice::Pull request image tag: $tag"
+
+      # A pull request gets exactly one tag, the source branch name, so a
+      # reviewer can pull the branch and run it. Deliberately not the sha, the
+      # semver or `latest`: those name releases, and a tag that moves with the
+      # branch means "whatever this PR currently is", which is what someone
+      # testing a PR actually wants. type=ref,event=pr would tag it `pr-<n>`,
+      # naming the review rather than the thing under review.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
+            type=raw,value=${{ steps.branch.outputs.tag }},enable=${{ github.event_name == 'pull_request' }}
+            type=ref,event=branch,enable=${{ github.event_name != 'pull_request' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=sha,prefix=
+            type=sha,prefix=,enable=${{ github.event_name != 'pull_request' }}
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=Lemmary
