@@ -10,6 +10,7 @@ import (
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
+	"github.com/openai/openai-go/shared"
 	"lemmary/backend/internal/aiprovider"
 )
 
@@ -104,6 +105,26 @@ func CompleteChat(ctx context.Context, client openai.Client, logger *slog.Logger
 			aiprovider.ChatCompletionsURL(baseURL),
 			string(params.Model),
 			append(extra, "retry", "omit_response_format")...,
+		)
+		resp, err = client.Chat.Completions.New(ctx, params)
+		if err == nil {
+			logUsage(logger, string(params.Model), usageOf(resp), extra...)
+			return resp, nil
+		}
+	}
+	if isReasoningEffortToolConflictError(err) {
+		logger.Warn("model rejected reasoning_effort with function tools; retrying with reasoning_effort=none",
+			"model", params.Model,
+			slog.Any("error", err),
+		)
+		params.ReasoningEffort = shared.ReasoningEffort("none")
+		aiprovider.LogRequest(
+			logger,
+			sdk,
+			http.MethodPost,
+			aiprovider.ChatCompletionsURL(baseURL),
+			string(params.Model),
+			append(extra, "retry", "reasoning_effort_none")...,
 		)
 		resp, err = client.Chat.Completions.New(ctx, params)
 		if err == nil {

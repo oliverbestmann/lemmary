@@ -50,3 +50,21 @@ func isUnsupportedResponseFormatError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "response_format") || strings.Contains(msg, "json_object")
 }
+
+// isReasoningEffortToolConflictError recognises a provider rejecting a
+// non-"none" reasoning_effort alongside function tools on /v1/chat/completions
+// (some gpt-5-family models default reasoning_effort server-side and only
+// accept it combined with tools once it is explicitly set to "none").
+func isReasoningEffortToolConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *openai.Error
+	if errors.As(err, &apiErr) {
+		if !strings.EqualFold(strings.TrimSpace(apiErr.Param), "reasoning_effort") {
+			return false
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "reasoning_effort") && strings.Contains(msg, "function tools")
+}
