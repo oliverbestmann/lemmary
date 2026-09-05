@@ -12,3 +12,14 @@
 # still echoes but this version does not honour.
 allowBuilds:
   esbuild: true
+
+# package.json's `packageManager` field pins pnpm 12.1.0, and pnpm's default
+# `pmOnFail: download` honours that by fetching that exact build into
+# ~/.local/share/pnpm/store and re-executing it. Those are generic-linux
+# dynamically linked binaries, which NixOS only runs where nix-ld happens to be
+# set up -- otherwise `nix develop --command npm run build` dies at the
+# `pnpm run docs:build` step with "Could not start dynamically linked
+# executable". `ignore` uses whichever pnpm is on PATH (the flake pins
+# pkgs.pnpm). It has to live here: pnpm reads this setting from
+# pnpm-workspace.yaml only, not from .npmrc or an npm_config_* env var.
+pmOnFail: ignore
