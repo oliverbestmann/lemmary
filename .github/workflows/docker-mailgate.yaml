@@ -1,0 +1,48 @@
+# The mailgate image: the SMTP gateway that files received mail into Lemmary's
+# watch directory. Its own module, its own Dockerfile, its own image -- so it is
+# built only when something it is actually made of changes, and a server-only
+# commit does not republish it.
+name: CI mailgate
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "mailgate/**"
+      - "!mailgate/**/*_test.go"
+      - "!mailgate/README.md"
+      - "Dockerfile.mailgate"
+      - ".github/workflows/docker-mailgate.yaml"
+      - ".github/workflows/docker-image.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: mailgate/go.mod
+          cache-dependency-path: mailgate/go.sum
+      # The server's suite does not reach into this module -- Go excludes nested
+      # modules from ./... -- so without this the gateway would ship untested.
+      - name: Test
+        working-directory: mailgate
+        run: go test ./...
+
+  image:
+    needs: test
+    uses: ./.github/workflows/docker-image.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      image: ${{ github.repository }}-mailgate
+      dockerfile: Dockerfile.mailgate
+      title: Lemmary mailgate
