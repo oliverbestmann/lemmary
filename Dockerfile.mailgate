@@ -1,0 +1,52 @@
+# mailgate is a separate image from the server on purpose: it is the process
+# that faces the public internet, it holds no credentials for the archive, and
+# it is pure Go -- so unlike the backend it needs no FAISS, no CGO and no
+# poppler, and the whole thing fits in a scratch image. It is a separate Go
+# module too, so this build never sees the server's source or its dependencies.
+#
+#   docker build -f Dockerfile.mailgate -t lemmary-mailgate:local .
+#
+# It writes into the same directory the server's WATCH_DIR points at, so the two
+# containers share one volume and nothing else.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27-trixie AS build
+
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /app
+COPY mailgate/go.mod mailgate/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+COPY mailgate/ .
+
+# CGO off, so this cross-compiles without a toolchain for the target and the
+# result runs on an empty image.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+    go build -trimpath -ldflags="-s -w" -o /out/mailgate .
+
+FROM scratch
+
+LABEL org.opencontainers.image.title="Lemmary mailgate" \
+      org.opencontainers.image.description="SMTP gateway that files received mail into Lemmary's watch directory"
+
+COPY --from=build /out/mailgate /mailgate
+
+# uid 1000 is the server image's "app" user, and the two share the spool volume:
+# mailgate creates the owner directories and writes documents into them, and the
+# server's watch import then moves those files into import-archived/, which
+# needs write on the same directories. A different uid here would leave every
+# delivery unreadable at the far end -- or unmovable, which is worse, because
+# the importer would re-import it on every pass.
+#
+# Unprivileged all the same: the container port is 2525 and the host publishes
+# it as 25, so nothing here ever needs to bind a privileged port. There is no
+# entrypoint dropping privileges either, because unlike the server this process
+# has no pre-existing volume of its own to adopt.
+USER 1000:1000
+
+ENV MAILGATE_ADDR=:2525
+EXPOSE 2525
+
+ENTRYPOINT ["/mailgate"]
