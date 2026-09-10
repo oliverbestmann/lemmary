@@ -145,6 +145,12 @@ func Register(
 			g.GET("/scan/pdf", bindAuth(handleGetScanPDF(app)))
 			g.DELETE("/scan", bindAuth(handleDeleteScan(app)))
 			g.POST("/scan/document", bindAuth(handlePostScanDocument(app)))
+			// Top-level rather than under /api/app: this is the scripted-upload
+			// entry point (curl, a cron job, a CLI script), not part of the SPA's
+			// own surface, and giving it its own path keeps a script's one request
+			// from needing to know the SPA prefix exists.
+			e.Router.POST("/api/upload", bindAuth(handlePostUpload(app))).
+				Bind(apis.BodyLimit(pdfsplit.MaxPDFBytes + (1 << 20)))
 			return e.Next()
 		},
 	})
