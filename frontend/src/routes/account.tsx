@@ -1,4 +1,4 @@
-import { type SubmitEvent, useState } from 'react'
+import { type SubmitEvent, useEffect, useRef, useState } from 'react'
 import { getMe } from '../lib/auth'
 import {
   deletePasskey,
@@ -11,6 +11,13 @@ import {
 import { defaultPasskeyName, passkeysSupported, passkeyUnavailableHint } from '../lib/webauthn'
 import { createMCPToken, getMCPStatus } from '../lib/api/mcp'
 import { mcpSnippets } from '../lib/mcpSnippets'
+import {
+  apiTokenDateLabel,
+  createApiToken,
+  deleteApiToken,
+  listApiTokens,
+  type ApiToken,
+} from '../lib/api/api-tokens'
 import { useAsync } from '../hooks/useAsync'
 import {
   Button,
@@ -371,6 +378,191 @@ function AgentsSection() {
   )
 }
 
+type NewTokenDialogProps = {
+  token: string | null
+  onClose: () => void
+}
+
+/**
+ * Shows a freshly minted token exactly once: the server never sends the raw
+ * value again, only its hash. A modal rather than an inline banner, so it
+ * cannot be scrolled past and lost before it is copied.
+ */
+function NewTokenDialog({ token, onClose }: NewTokenDialogProps) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    const dialog = ref.current
+    if (!dialog) return
+    if (!token) {
+      dialog.close()
+      return
+    }
+    dialog.showModal()
+  }, [token])
+
+  async function onCopy() {
+    if (!token) return
+    try {
+      await navigator.clipboard.writeText(token)
+      setCopied(true)
+    } catch {
+      // Clipboard access can be denied; the token is still selectable text.
+    }
+  }
+
+  return (
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      className="m-auto max-w-lg border border-line bg-surface p-5 text-ink backdrop:bg-ink/40"
+    >
+      <h3 className="font-display text-lg font-semibold text-ink">Your new API token</h3>
+      <p className="mt-1 text-sm text-ink-soft">
+        Copy it now — it will not be shown again. If you lose it, delete this token and create a
+        new one.
+      </p>
+      <code className="mt-4 block break-all rounded-xs border border-line-strong bg-bright px-3 py-2 text-sm text-ink">
+        {token}
+      </code>
+      <div className="mt-4 flex items-center gap-2">
+        <Button onClick={() => void onCopy()}>{copied ? 'Copied' : 'Copy to clipboard'}</Button>
+        <Button variant="secondary" onClick={onClose}>
+          Done
+        </Button>
+      </div>
+    </dialog>
+  )
+}
+
+type ApiTokenRowProps = {
+  token: ApiToken
+  busy: boolean
+  onDelete: (token: ApiToken) => Promise<void>
+}
+
+function ApiTokenRow({ token, busy, onDelete }: ApiTokenRowProps) {
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-2 rounded-xs border border-line bg-bright px-3 py-2">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-ink">{token.name}</p>
+        <p className="text-xs text-ink-soft">
+          Added {apiTokenDateLabel(token.created)} · Last used{' '}
+          {apiTokenDateLabel(token.last_used)}
+        </p>
+      </div>
+      <Button size="xs" variant="danger" disabled={busy} onClick={() => void onDelete(token)}>
+        Delete
+      </Button>
+    </li>
+  )
+}
+
+function ApiTokensSection() {
+  const { data: tokens, error: loadError, reload } = useAsync(listApiTokens, [])
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [newToken, setNewToken] = useState<string | null>(null)
+
+  const rows = tokens ?? []
+
+  function openAddForm() {
+    setName('')
+    setError('')
+    setAdding(true)
+  }
+
+  async function onAdd(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault()
+    try {
+      setBusy(true)
+      setError('')
+      const created = await createApiToken(name.trim() || 'API token')
+      await reload()
+      setAdding(false)
+      setNewToken(created.token)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create the API token')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onDelete(token: ApiToken) {
+    if (!window.confirm(`Remove "${token.name}"? Anything using it will stop working.`)) {
+      return
+    }
+    try {
+      setBusy(true)
+      setError('')
+      await deleteApiToken(token.id)
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove the API token')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className={sectionClassName}>
+      <h2 className={sectionTitleClassName}>API tokens</h2>
+      <p className={`${fieldHintClassName} mb-4`}>
+        Authenticate uploads and other scripted access without a browser session. Create one token
+        per script or device, so a compromised one can be revoked on its own.
+      </p>
+
+      {loadError && <p className="mb-3 text-sm text-madder">{loadError}</p>}
+      {error && <p className="mb-3 text-sm text-madder">{error}</p>}
+
+      {rows.length === 0 ? (
+        <p className="mb-4 text-sm text-ink-soft">No API tokens yet.</p>
+      ) : (
+        <ul className="mb-4 flex flex-col gap-2">
+          {rows.map((token) => (
+            <ApiTokenRow key={token.id} token={token} busy={busy} onDelete={onDelete} />
+          ))}
+        </ul>
+      )}
+
+      {!adding && (
+        <Button onClick={openAddForm} disabled={busy}>
+          Create API token
+        </Button>
+      )}
+
+      {adding && (
+        <form className="flex flex-col gap-3" onSubmit={onAdd}>
+          <label className={labelClassName}>
+            <span className={labelTextClassName}>Name</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className={`${inputClassName} max-w-sm`}
+              placeholder="e.g. upload script"
+              autoFocus
+            />
+          </label>
+          <p className={fieldHintClassName}>Something you will recognize, like where it runs.</p>
+          <div className="flex items-center gap-2">
+            <Button type="submit" disabled={busy}>
+              {busy ? 'Creating...' : 'Create token'}
+            </Button>
+            <Button variant="secondary" disabled={busy} onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+
+      <NewTokenDialog key={newToken} token={newToken} onClose={() => setNewToken(null)} />
+    </section>
+  )
+}
+
 export function AccountPage() {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
@@ -381,6 +573,7 @@ export function AccountPage() {
       <SignedInSection />
       <AgentsSection />
       <PasskeysSection />
+      <ApiTokensSection />
     </div>
   )
 }
