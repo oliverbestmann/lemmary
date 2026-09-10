@@ -7,10 +7,21 @@ import (
 	"strings"
 
 	"github.com/pocketbase/pocketbase/core"
+
+	"lemmary/backend/internal/apitoken"
 )
 
+// bindAuth accepts either an ordinary PocketBase session (already resolved
+// into e.Auth by the time a handler runs) or an API token in the
+// Authorization header. This is what lets uploads and the rest of the app API
+// be driven by a script that has no browser session to hold.
 func bindAuth(handler func(*core.RequestEvent) error) func(*core.RequestEvent) error {
 	return func(e *core.RequestEvent) error {
+		if e.Auth == nil {
+			if record, err := apitoken.Authenticate(e.App, e.Request); err == nil {
+				e.Auth = record
+			}
+		}
 		if e.Auth == nil {
 			return writeError(e, http.StatusUnauthorized, "Authentication required.")
 		}
