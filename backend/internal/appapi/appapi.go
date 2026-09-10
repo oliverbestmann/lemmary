@@ -38,6 +38,9 @@ func Register(
 			g.POST("/passkeys/login/begin", handlePostPasskeyLoginBegin(app))
 			g.POST("/passkeys/login/finish", handlePostPasskeyLoginFinish(app)).
 				Bind(apis.BodyLimit(passkeyMaxBodyBytes))
+			g.GET("/api-tokens", bindAuth(handleListAPITokens(app)))
+			g.POST("/api-tokens", bindAuth(handlePostAPIToken(app)))
+			g.DELETE("/api-tokens/{id}", bindAuth(handleDeleteAPIToken(app)))
 			g.GET("/passkeys", bindAuth(handleGetPasskeys(app)))
 			g.POST("/passkeys/register/begin", bindAuth(handlePostPasskeyRegisterBegin(app)))
 			g.POST("/passkeys/register/finish", bindAuth(handlePostPasskeyRegisterFinish(app))).
