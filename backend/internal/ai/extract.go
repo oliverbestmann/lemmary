@@ -40,6 +40,8 @@ type ExtractionCatalog struct {
 	// from Tags. Only set when a human reviews every document, so the
 	// suggestions have someone to accept them.
 	SuggestNewTags bool
+	// TagsOnly asks for tags and suggested_tags and nothing else.
+	TagsOnly bool
 	// CustomFields are the admin's own document fields, asked for by name.
 	CustomFields []models.CustomField
 }
@@ -52,6 +54,9 @@ type Extractor interface {
 }
 
 func buildExtractionSystemPrompt(resultLanguage, rules string, catalog ExtractionCatalog) string {
+	if catalog.TagsOnly {
+		return buildTagsOnlyPrompt(catalog)
+	}
 	prompt := `You extract structured metadata from OCR document text.
 Return ONLY valid JSON with these fields:
 - title (string, required)
@@ -80,6 +85,7 @@ Return ONLY valid JSON with these fields:
 
 Also return suggested_tags (array of strings): up to 3 short new tag names that fit this document and are NOT in the existing tags list, in the language of the existing tags. Keep tags itself restricted to the list above; return an empty suggested_tags array when the existing tags already cover the document.`
 	}
+	prompt += tagLanguagePrompt
 	prompt += formatCustomFieldsPrompt(catalog.CustomFields)
 	prompt += formatExtractionRulesPrompt(rules)
 

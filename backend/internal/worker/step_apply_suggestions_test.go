@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -73,24 +74,21 @@ func TestApplyMetadataRoutesSuggestedTags(t *testing.T) {
 		return doc, saved
 	}
 
-	t.Run("review on", func(t *testing.T) {
-		doc, saved := run(t, true)
-		if got := doc.GetStringSlice("tags"); len(got) != 1 || got[0] != invoices {
-			t.Fatalf("document tags = %v, want only the existing Invoices tag %q", got, invoices)
-		}
-		want := []string{"Heating", "Warranty"}
-		if len(saved.SuggestedTags) != len(want) || saved.SuggestedTags[0] != want[0] || saved.SuggestedTags[1] != want[1] {
-			t.Fatalf("job suggested_tags = %v, want %v", saved.SuggestedTags, want)
-		}
-	})
-
-	t.Run("review off", func(t *testing.T) {
-		doc, saved := run(t, false)
-		if got := doc.GetStringSlice("tags"); len(got) != 0 {
-			t.Fatalf("document tags = %v, want none: suggestions are not read when nobody reviews", got)
+	for _, review := range []bool{true, false} {
+		doc, saved := run(t, review)
+		got := doc.GetStringSlice("tags")
+		if len(got) != 3 || !slices.Contains(got, invoices) {
+			t.Fatalf("review=%v: document tags = %v, want the existing Invoices tag %q plus two created ones", review, got, invoices)
 		}
 		if len(saved.SuggestedTags) != 0 {
-			t.Fatalf("job suggested_tags = %v, want none", saved.SuggestedTags)
+			t.Fatalf("review=%v: job suggested_tags = %v, want none", review, saved.SuggestedTags)
 		}
-	})
+	}
+	all, err := app.FindAllRecords("tags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("tags = %d, want 3: Invoices plus Heating and Warranty created once", len(all))
+	}
 }

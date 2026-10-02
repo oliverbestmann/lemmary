@@ -23,6 +23,7 @@ import {
   sectionTitleClassName,
 } from '../components/ui'
 import { lang, t, tNode } from '../i18n'
+import { TagsRebuildSection } from './tagsRebuild'
 
 /** What the picker opens on for a tag that has no colour of its own. */
 const UNCOLORED_SWATCH = '#808080'
@@ -487,6 +488,7 @@ export function TagsPage() {
           </div>
         </form>
       </section>
+      <TagsRebuildSection onDone={reload} />
     </div>
   )
 }
